@@ -1,0 +1,252 @@
+--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local RS = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+
+repeat task.wait() until
+    player.Character
+    and player.Character:FindFirstChild("HumanoidRootPart")
+    and player.Character:FindFirstChild("Humanoid")
+    and player:FindFirstChildOfClass("PlayerGui")
+    and player.Character:FindFirstChild("ZeroGravity")
+
+pcall(function()
+    if _G.Rayfield then _G.Rayfield:Destroy() end
+end)
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+_G.Rayfield = Rayfield
+
+task.wait(0.5)
+
+--// UI
+local Window = Rayfield:CreateWindow({
+    Name = "Yui's Script",
+    LoadingTitle = "Criminal Auto-Farm v2.15",
+    LoadingSubtitle = "Physics Fly + Dynamic E Punch",
+    Icon = 0,
+    ConfigurationSaving = { Enabled=true, FolderName="YuiCriminalFarm", FileName="Config" }
+})
+
+local MainTab = Window:CreateTab("Main")
+local SettingsTab = Window:CreateTab("Settings")
+
+--// VARIABLES
+local NPC_FOLDER = workspace:WaitForChild("NPCs",15)
+local NPC_NAME = "Criminal"
+
+local farming = false
+local floatHeight = 6
+local swayAmount = 2
+local conn, bodyPos, bodyGyro, hum
+
+local QuestRemote = RS:WaitForChild("Questing"):WaitForChild("Networking"):WaitForChild("Remotes"):WaitForChild("QUESTING_START_QUEST")
+local CompleteQuest = RS:WaitForChild("Remotes"):WaitForChild("Quest"):WaitForChild("CompleteQuest")
+local CRIMINAL_QUEST_ID = "QUEST_INJURED MAN_1"
+local REQUIRED_KILLS = 9
+
+--// FUNCTIONS
+local function getCriminalHRP()
+    local npc = NPC_FOLDER:FindFirstChild(NPC_NAME)
+    return npc and npc:FindFirstChild("HumanoidRootPart")
+end
+
+local function stopFly()
+    if conn then conn:Disconnect() conn = nil end
+    if bodyPos then bodyPos:Destroy() bodyPos=nil end
+    if bodyGyro then bodyGyro:Destroy() bodyGyro=nil end
+    if hum then
+        hum.PlatformStand = false
+        hum:ChangeState(Enum.HumanoidStateType.Running)
+    end
+end
+
+local function startFly()
+    stopFly()
+    local char = player.Character
+    if not char then return end
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    hum = char:WaitForChild("Humanoid")
+
+    local targetHRP = getCriminalHRP()
+    if not targetHRP then
+        Rayfield:Notify({Title="Wait",Content="Criminal spawning...",Duration=3})
+        return
+    end
+
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    bodyPos = Instance.new("BodyPosition")
+    bodyPos.MaxForce = Vector3.new(1e4,1e4,1e4)
+    bodyPos.P = 8000
+    bodyPos.D = 1000
+    bodyPos.Parent = hrp
+
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(8000,8000,8000)
+    bodyGyro.P = 7000
+    bodyGyro.D = 900
+    bodyGyro.Parent = hrp
+
+    hum.PlatformStand = true
+
+    local goalPos = targetHRP.Position + Vector3.new(0,floatHeight,0)
+    local goalCF = CFrame.lookAt(goalPos,targetHRP.Position)
+
+    TweenService:Create(bodyPos,TweenInfo.new(1.8,Enum.EasingStyle.Quart),{Position=goalPos}):Play()
+    TweenService:Create(bodyGyro,TweenInfo.new(1.8,Enum.EasingStyle.Quart),{CFrame=goalCF}):Play()
+
+    conn = RunService.Heartbeat:Connect(function()
+        if not farming then return stopFly() end
+        local target = getCriminalHRP()
+        if not target then return stopFly() end
+
+        local t = tick()
+        local sway = Vector3.new(
+            math.sin(t*1.5)*swayAmount,
+            math.sin(t*2.3)*0.5,
+            math.cos(t*1.8)*swayAmount
+        )
+
+        local desired = target.Position + Vector3.new(0,floatHeight,0)+sway
+        bodyPos.Position = bodyPos.Position:Lerp(desired,0.3)
+        bodyGyro.CFrame = CFrame.lookAt(bodyPos.Position,target.Position)
+    end)
+end
+
+--// QUEST HANDLER
+local function getQuestProgress()
+    local gui = player:FindFirstChild("PlayerGui")
+    if not gui then return end
+    local ig = gui:FindFirstChild("InteractGui")
+    if not ig then return end
+    local resp = ig:FindFirstChild("NpcResponses")
+    if not resp then return end
+    local info = resp:FindFirstChild("QuestInfo")
+    if not info then return end
+
+    if info:FindFirstChild("Amount") then
+        local txt = info.Amount.Text
+        local a,b = string.match(txt,"(%d+)%s*/%s*(%d+)")
+        return tonumber(a), tonumber(b)
+    end
+end
+
+local function tryCompleteQuest()
+    local cur,total = getQuestProgress()
+    if not cur or not total then return end
+    if total ~= REQUIRED_KILLS then return end
+    if cur<total then return end
+
+    pcall(function() CompleteQuest:FireServer() end)
+    task.wait(0.4)
+    pcall(function() QuestRemote:FireServer(CRIMINAL_QUEST_ID) end)
+
+    Rayfield:Notify({Title="Quest Complete!",Content="Criminal quest restarted.",Duration=4})
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if farming then tryCompleteQuest() end
+    end
+end)
+
+--// UI
+local MainSection = MainTab:CreateSection("Criminal Farm")
+
+MainTab:CreateToggle({
+    Name="Auto Farm",
+    CurrentValue=false,
+    Flag="FarmToggle",
+    Callback=function(v)
+        farming = v
+        if v then
+            pcall(function() QuestRemote:FireServer(CRIMINAL_QUEST_ID) end)
+            Rayfield:Notify({Title="Quest Started",Content="Criminal quest accepted.",Duration=3})
+            task.spawn(startFly)
+            Rayfield:Notify({Title="ON",Content="Farming Criminal!",Duration=4})
+        else
+            stopFly()
+            Rayfield:Notify({Title="OFF",Content="Stopped",Duration=2})
+        end
+    end
+})
+
+MainTab:CreateButton({
+    Name="Fly to Criminal (Manual)",
+    Callback=function() task.spawn(startFly) end
+})
+
+local SettingsSection = SettingsTab:CreateSection("Movement")
+
+SettingsTab:CreateSlider({
+    Name="Float Height",
+    Range={4,12},
+    Increment=0.1,
+    Suffix=" studs",
+    CurrentValue=floatHeight,
+    Flag="HeightSlider",
+    Callback=function(val) floatHeight = val end
+})
+
+SettingsTab:CreateSlider({
+    Name="Sway Amount",
+    Range={0,4},
+    Increment=0.1,
+    Suffix=" studs",
+    CurrentValue=swayAmount,
+    Flag="SwaySlider",
+    Callback=function(val) swayAmount = val end
+})
+
+--// DYNAMIC E PUNCH
+task.spawn(function()
+    while true do
+        if farming then
+            task.wait(math.random(110,280)/1000)
+            local char = player.Character
+            local npcHRP = getCriminalHRP()
+            if char and char:FindFirstChild("ZeroGravity") and char.ZeroGravity:FindFirstChild("E") and npcHRP then
+                if bodyPos then
+                    bodyPos.Position += Vector3.new(math.random(-25,25)/100,0,math.random(-25,25)/100)
+                end
+                local args = {CFrame.new(npcHRP.Position)}
+                pcall(function() char.ZeroGravity.E:FireServer(unpack(args)) end)
+            end
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+--// NPC RESPAWN
+NPC_FOLDER.ChildAdded:Connect(function(child)
+    if child.Name==NPC_NAME and farming then
+        task.wait(1)
+        startFly()
+    end
+end)
+
+player.CharacterAdded:Connect(function()
+    task.wait(3)
+    if farming then startFly() end
+end)
+
+--// FAILSAFE
+task.spawn(function()
+    while task.wait(1.5) do
+        if farming and not getCriminalHRP() then
+            task.wait(1)
+            startFly()
+        end
+    end
+end)
+
+Rayfield:LoadConfiguration()
+
+Rayfield:Notify({Title="Loaded v2.15",Content="UI Fixed | Auto Farm | Auto Quest | Dynamic Punch",Duration=5,Image=4483362458})
